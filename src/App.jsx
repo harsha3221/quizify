@@ -33,7 +33,6 @@ function App() {
 
   return (
     <Routes>
-
       {/* =========================
          PUBLIC ROUTES
       ========================= */}
@@ -49,8 +48,6 @@ function App() {
       <Route path="/verify-email" element={<VerifyEmailRequired />} />
       <Route path="/verification-success" element={<VerificationSuccess />} />
       <Route path="/verification-failed" element={<VerificationFailed />} />
-
-
 
       {/* =========================
          TEACHER ROUTES
@@ -121,8 +118,6 @@ function App() {
         }
       />
 
-
-
       {/* =========================
          STUDENT ROUTES
       ========================= */}
@@ -180,7 +175,6 @@ function App() {
           </ProtectedRoute>
         }
       />
-
     </Routes>
   );
 }
