@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "react-router-dom";
 import "../css/quiz-questions.css";
 import { useAuth } from "../context/AuthContext";
@@ -32,7 +32,6 @@ export default function QuizQuestions() {
   const [editMode, setEditMode] = useState(false);
   const [editQuestionId, setEditQuestionId] = useState(null);
 
-  // AI state
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiTopic, setAiTopic] = useState("");
   const [aiDifficulty, setAiDifficulty] = useState("medium");
@@ -41,6 +40,13 @@ export default function QuizQuestions() {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiPreview, setAiPreview] = useState(null);
+
+  const aiAbortControllerRef = useRef(null);
+  const currentOptionsRef = useRef(options);
+
+  useEffect(() => {
+    currentOptionsRef.current = options;
+  }, [options]);
 
   const compressImage = async (file) => {
     try {
@@ -61,13 +67,20 @@ export default function QuizQuestions() {
     const url = URL.createObjectURL(compressed);
 
     if (type === "question") {
-      if (questionPreview) URL.revokeObjectURL(questionPreview);
+      if (questionPreview && questionPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(questionPreview);
+      }
       setQuestionImage(compressed);
       setQuestionPreview(url);
     } else {
       setOptions((prev) => {
         const copy = [...prev];
-        if (copy[index].previewUrl) URL.revokeObjectURL(copy[index].previewUrl);
+        if (
+          copy[index].previewUrl &&
+          copy[index].previewUrl.startsWith("blob:")
+        ) {
+          URL.revokeObjectURL(copy[index].previewUrl);
+        }
         copy[index].image = compressed;
         copy[index].previewUrl = url;
         return copy;
@@ -115,12 +128,29 @@ export default function QuizQuestions() {
 
   useEffect(() => {
     fetchQuestions(true);
-  }, [fetchQuestions]);
+    return () => {
+      if (aiAbortControllerRef.current) {
+        aiAbortControllerRef.current.abort();
+      }
+      if (questionPreview && questionPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(questionPreview);
+      }
+      currentOptionsRef.current.forEach((opt) => {
+        if (opt.previewUrl && opt.previewUrl.startsWith("blob:")) {
+          URL.revokeObjectURL(opt.previewUrl);
+        }
+      });
+    };
+  }, [fetchQuestions, questionPreview]);
 
   const resetForm = useCallback(() => {
-    if (questionPreview) URL.revokeObjectURL(questionPreview);
+    if (questionPreview && questionPreview.startsWith("blob:")) {
+      URL.revokeObjectURL(questionPreview);
+    }
     options.forEach((opt) => {
-      if (opt.previewUrl) URL.revokeObjectURL(opt.previewUrl);
+      if (opt.previewUrl && opt.previewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(opt.previewUrl);
+      }
     });
     setQuestionText("");
     setMarks(1);
@@ -159,6 +189,11 @@ export default function QuizQuestions() {
       setAiError("Please enter a topic.");
       return;
     }
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    aiAbortControllerRef.current = controller;
     setAiError("");
     setAiPreview(null);
     setAiGenerating(true);
@@ -178,6 +213,7 @@ export default function QuizQuestions() {
             num_options: aiNumOptions,
             num_correct: aiNumCorrect,
           }),
+          signal: controller.signal,
         },
       );
       if (!res.ok) {
@@ -187,9 +223,13 @@ export default function QuizQuestions() {
       const data = await res.json();
       setAiPreview(data);
     } catch (err) {
-      setAiError(err.message);
+      if (err.name !== "AbortError") {
+        setAiError(err.message);
+      }
     } finally {
-      setAiGenerating(false);
+      if (aiAbortControllerRef.current === controller) {
+        setAiGenerating(false);
+      }
     }
   };
 
@@ -271,6 +311,18 @@ export default function QuizQuestions() {
     }
   };
 
+  const handleRemoveOption = (indexToRemove) => {
+    const targetOption = options[indexToRemove];
+    if (
+      targetOption &&
+      targetOption.previewUrl &&
+      targetOption.previewUrl.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(targetOption.previewUrl);
+    }
+    setOptions(options.filter((_, idx) => idx !== indexToRemove));
+  };
+
   if (loading) return <h2>Loading questions...</h2>;
 
   return (
@@ -279,7 +331,6 @@ export default function QuizQuestions() {
         {editMode ? "Edit Question" : "Add Question"} to Quiz #{quizId}
       </h2>
 
-      {/* AI PANEL */}
       <div className="ai-panel">
         <button
           type="button"
@@ -397,7 +448,6 @@ export default function QuizQuestions() {
         )}
       </div>
 
-      {/* QUESTIONS LIST */}
       <div className="questions-list">
         {questions.map((q) => (
           <div key={q.id} className="question-card">
@@ -447,7 +497,6 @@ export default function QuizQuestions() {
         ))}
       </div>
 
-      {/* FORM */}
       <form onSubmit={handleSubmit} className="add-question-form">
         <textarea
           placeholder="Question text..."
@@ -516,12 +565,7 @@ export default function QuizQuestions() {
                   style={{ width: "36px", height: "36px", objectFit: "cover" }}
                 />
               )}
-              <button
-                type="button"
-                onClick={() =>
-                  setOptions(options.filter((_, idx) => idx !== i))
-                }
-              >
+              <button type="button" onClick={() => handleRemoveOption(i)}>
                 ✖
               </button>
             </div>

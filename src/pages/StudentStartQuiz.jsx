@@ -3,7 +3,6 @@ import { useParams, useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import "../css/student-quiz.css";
 import { useAuth } from "../context/AuthContext";
-
 import {
   startStudentQuizApi,
   saveStudentAnswerApi,
@@ -12,7 +11,6 @@ import {
 } from "../api/studentQuizStart.api";
 import { API_BASE } from "../config";
 
-// Initialize Socket with credentials to pick up the Express Session cookie
 const socket = io(`${API_BASE}`, {
   transports: ["websocket"],
   withCredentials: true,
@@ -33,23 +31,14 @@ export default function StudentStartQuiz() {
   const intervalRef = useRef(null);
   const warnedOnceRef = useRef(false);
   const isSubmittingRef = useRef(false);
+  const endTimeRef = useRef(null);
+  const debounceTimersRef = useRef({});
 
-  /* -------------------------------------------------- */
-  /* AUTH & ROLE GUARD                                  */
-  /* -------------------------------------------------- */
-  useEffect(() => {
-    if (!loading && user && user.role !== "student") {
-      alert("Access Denied: This area is for students only.");
-      navigate("/");
-    }
-  }, [user, loading, navigate]);
-
-  /* -------------------------------------------------- */
-  /* SUBMIT LOGIC                                       */
-  /* -------------------------------------------------- */
   const handleSubmit = useCallback(async () => {
     if (isSubmittingRef.current) return;
     isSubmittingRef.current = true;
+
+    Object.values(debounceTimersRef.current).forEach(clearTimeout);
 
     try {
       await submitStudentQuizApi(quizId, csrfToken);
@@ -60,9 +49,25 @@ export default function StudentStartQuiz() {
     }
   }, [quizId, csrfToken, navigate]);
 
-  /* -------------------------------------------------- */
-  /* DATA FETCHING & TIMER INITIALIZATION               */
-  /* -------------------------------------------------- */
+  const checkTimeExpiry = useCallback(() => {
+    if (!endTimeRef.current) return;
+    const remaining = endTimeRef.current - Date.now();
+    if (remaining <= 0) {
+      setTimeLeft(0);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      handleSubmit();
+    } else {
+      setTimeLeft(remaining);
+    }
+  }, [handleSubmit]);
+
+  useEffect(() => {
+    if (!loading && user && user.role !== "student") {
+      alert("Access Denied: This area is for students only.");
+      navigate("/");
+    }
+  }, [user, loading, navigate]);
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -78,7 +83,6 @@ export default function StudentStartQuiz() {
         setQuiz(data.quiz);
         setQuestions(data.questions || []);
 
-        // Sync answers
         const savedAnswersMap = {};
         if (data.existingAnswers && Array.isArray(data.existingAnswers)) {
           data.existingAnswers.forEach((ans) => {
@@ -91,13 +95,11 @@ export default function StudentStartQuiz() {
         }
         setAnswers(savedAnswersMap);
 
-        // TIMER LOGIC: Personal Start Time + Duration
         if (data.attempt?.started_at && data.quiz?.duration_minutes) {
           const startedAt = new Date(data.attempt.started_at).getTime();
           const durationMs = data.quiz.duration_minutes * 60 * 1000;
-          const personalEndTime = startedAt + durationMs;
-
-          const remaining = personalEndTime - Date.now();
+          endTimeRef.current = startedAt + durationMs;
+          const remaining = endTimeRef.current - Date.now();
           setTimeLeft(Math.max(0, remaining));
         }
       } catch (err) {
@@ -106,33 +108,19 @@ export default function StudentStartQuiz() {
         setLoading(false);
       }
     };
-
     load();
   }, [quizId, csrfToken, navigate]);
 
-  /* -------------------------------------------------- */
-  /* TIMER ENGINE                                       */
-  /* -------------------------------------------------- */
   useEffect(() => {
     if (timeLeft === null || timeLeft <= 0) return;
-
     intervalRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1000) {
-          clearInterval(intervalRef.current);
-          handleSubmit();
-          return 0;
-        }
-        return prev - 1000;
-      });
+      checkTimeExpiry();
     }, 1000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [timeLeft, checkTimeExpiry]);
 
-    return () => clearInterval(intervalRef.current);
-  }, [timeLeft, handleSubmit]);
-
-  /* -------------------------------------------------- */
-  /* PROCTORING & SOCKET COMMANDS                       */
-  /* -------------------------------------------------- */
   useEffect(() => {
     if (!user || user.role !== "student") return;
 
@@ -142,6 +130,7 @@ export default function StudentStartQuiz() {
     };
 
     const handleVisibility = () => {
+      checkTimeExpiry();
       if (document.hidden) {
         reportIncident("tab_switch");
         if (!warnedOnceRef.current) {
@@ -157,24 +146,24 @@ export default function StudentStartQuiz() {
       reportIncident("right_click_attempt");
     };
 
-    // Teacher Command: Regular Force Submit
-    socket.on("force_submit", (data) => {
+    const handleForceSubmit = (data) => {
       if (String(data.quizId) === String(quizId)) {
         alert("Your session has been terminated by the instructor.");
         handleSubmit();
       }
-    });
+    };
 
-    // Teacher Command: Disqualification (Assign Zero)
-    socket.on("force_logout_zero", (data) => {
+    const handleForceLogoutZero = (data) => {
       isSubmittingRef.current = true;
       alert(
         data.message ||
           "Disqualified: You have been assigned zero for this quiz.",
       );
       navigate("/student/dashboard", { replace: true });
-    });
+    };
 
+    socket.on("force_submit", handleForceSubmit);
+    socket.on("force_logout_zero", handleForceLogoutZero);
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("contextmenu", handleContextMenu);
@@ -183,34 +172,35 @@ export default function StudentStartQuiz() {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("contextmenu", handleContextMenu);
-      socket.off("force_submit");
-      socket.off("force_logout_zero");
+      socket.off("force_submit", handleForceSubmit);
+      socket.off("force_logout_zero", handleForceLogoutZero);
+      Object.values(debounceTimersRef.current).forEach(clearTimeout);
     };
-  }, [quizId, csrfToken, handleSubmit, user, navigate]);
+  }, [quizId, csrfToken, handleSubmit, checkTimeExpiry, user, navigate]);
 
-  /* -------------------------------------------------- */
-  /* ANSWER INTERACTION                                 */
-  /* -------------------------------------------------- */
   const toggleOption = (qid, oid) => {
     if (isSubmittingRef.current) return;
-
     setAnswers((prev) => {
       const cur = prev[qid] || [];
       const updated = cur.includes(oid)
         ? cur.filter((x) => x !== oid)
         : [...cur, oid];
 
-      saveStudentAnswerApi(quizId, qid, updated, csrfToken).catch(() => {
-        console.error("Auto-save failed.");
-      });
+      if (debounceTimersRef.current[qid]) {
+        clearTimeout(debounceTimersRef.current[qid]);
+      }
+
+      debounceTimersRef.current[qid] = setTimeout(() => {
+        saveStudentAnswerApi(quizId, qid, updated, csrfToken).catch(() => {
+          console.error("Auto-save failed.");
+        });
+        delete debounceTimersRef.current[qid];
+      }, 600);
 
       return { ...prev, [qid]: updated };
     });
   };
 
-  /* -------------------------------------------------- */
-  /* RENDERING HELPERS                                  */
-  /* -------------------------------------------------- */
   if (loading)
     return <div className="loading-screen">Encrypting Quiz Session...</div>;
   if (error) return <div className="error-screen">Error: {error}</div>;
@@ -242,7 +232,6 @@ export default function StudentStartQuiz() {
             <h4 className="question-text">
               <span className="q-number">Q{i + 1}.</span> {q.question_text}
             </h4>
-
             {q.image_url && (
               <div className="question-image-wrapper">
                 <img
@@ -253,7 +242,6 @@ export default function StudentStartQuiz() {
                 />
               </div>
             )}
-
             <div className="options-grid">
               {q.options.map((opt) => (
                 <label
