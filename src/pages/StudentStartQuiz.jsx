@@ -10,6 +10,7 @@ import {
   reportCheatingApi,
 } from "../api/studentQuizStart.api";
 import { API_BASE } from "../config";
+import { createSafeHTML } from "../utils/sanitize";
 
 const socket = io(`${API_BASE}`, {
   transports: ["websocket"],
@@ -230,7 +231,8 @@ export default function StudentStartQuiz() {
         {questions.map((q, i) => (
           <section key={q.id} className="question-card">
             <h4 className="question-text">
-              <span className="q-number">Q{i + 1}.</span> {q.question_text}
+              <span className="q-number">Q{i + 1}.</span>{" "}
+              <span dangerouslySetInnerHTML={createSafeHTML(q.question_text)} />
             </h4>
             {q.image_url && (
               <div className="question-image-wrapper">
@@ -255,7 +257,10 @@ export default function StudentStartQuiz() {
                     onChange={() => toggleOption(q.id, opt.id)}
                   />
                   <div className="option-content">
-                    <span className="option-text">{opt.option_text}</span>
+                    <span
+                      className="option-text"
+                      dangerouslySetInnerHTML={createSafeHTML(opt.option_text)}
+                    />
                     {opt.image_url && (
                       <img
                         src={opt.image_url}
