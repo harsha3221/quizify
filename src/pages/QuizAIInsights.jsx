@@ -1,12 +1,9 @@
 import React, { useState } from "react";
-import { useParams } from "react-router-dom"; // 1. Import useParams
+import { useParams } from "react-router-dom";
 import { API_BASE } from "../config";
 
 export default function QuizAIInsights({ quizId: propQuizId }) {
-  // 2. Extract quizId from URL (e.g., /teacher/quiz/:quizId/analysis)
   const { quizId: urlQuizId } = useParams();
-
-  // Use the prop if it exists, otherwise use the URL parameter
   const quizId = propQuizId || urlQuizId;
 
   const [insights, setInsights] = useState(null);
@@ -14,7 +11,6 @@ export default function QuizAIInsights({ quizId: propQuizId }) {
   const [error, setError] = useState(null);
 
   const generateInsights = async () => {
-    // 3. Safety check to prevent fetching 'undefined'
     if (!quizId) {
       setError("Quiz ID not found. Please refresh or try again.");
       return;
@@ -36,7 +32,6 @@ export default function QuizAIInsights({ quizId: propQuizId }) {
 
       if (!response.ok) {
         const errorData = await response.json();
-        // This handles your 404 "No data found" error gracefully
         throw new Error(errorData.message || `Error: ${response.status}`);
       }
 
@@ -81,16 +76,23 @@ export default function QuizAIInsights({ quizId: propQuizId }) {
         <div className="ai-report-dashboard">
           <header className="report-header">
             <h3>📊 Intelligence Report</h3>
-            <p className="summary-text">{insights.summary}</p>
+            {/* Safe fallback if the summary text field is null/missing */}
+            <p className="summary-text">
+              {insights?.summary ?? "No summary provided by AI."}
+            </p>
           </header>
 
           <div className="insight-grid">
             <div className="card gap-card">
               <h4 style={{ color: "#f0ad4e" }}>⚠️ Concept Gaps (Confusion)</h4>
               <ul>
-                {insights.topicsToImprove?.map((topic, i) => (
-                  <li key={i}>{topic}</li>
+                {/* Fallback to empty array if topicsToImprove is missing/null */}
+                {(insights?.topicsToImprove || []).map((topic, i) => (
+                  <li key={i}>{topic ?? "Unknown concept"}</li>
                 ))}
+                {(insights?.topicsToImprove || []).length === 0 && (
+                  <li>No significant conceptual gaps identified!</li>
+                )}
               </ul>
             </div>
 
@@ -99,9 +101,13 @@ export default function QuizAIInsights({ quizId: propQuizId }) {
                 🚫 Knowledge Voids (Unattempted)
               </h4>
               <ul>
-                {insights.knowledgeVoids?.map((topic, i) => (
-                  <li key={i}>{topic}</li>
+                {/* Fallback to empty array if knowledgeVoids is missing/null */}
+                {(insights?.knowledgeVoids || []).map((topic, i) => (
+                  <li key={i}>{topic ?? "Unknown topic"}</li>
                 ))}
+                {(insights?.knowledgeVoids || []).length === 0 && (
+                  <li>No knowledge voids detected.</li>
+                )}
               </ul>
             </div>
           </div>
@@ -109,20 +115,30 @@ export default function QuizAIInsights({ quizId: propQuizId }) {
           <div className="card full-width">
             <h4>🔥 Critical Questions Analysis</h4>
             <div className="question-analysis-list">
-              {insights.hardQuestions?.map((item, i) => (
+              {/* Fallback array + inner key string defaults */}
+              {(insights?.hardQuestions || []).map((item, i) => (
                 <div key={i} className="analysis-item">
-                  <strong>Question:</strong> {item.question}
+                  <strong>Question:</strong>{" "}
+                  {item?.question ?? "Question text missing"}
                   <p>
-                    <strong>AI Verdict:</strong> {item.reason}
+                    <strong>AI Verdict:</strong>{" "}
+                    {item?.reason ?? "No verdict description provided."}
                   </p>
                 </div>
               ))}
+              {(insights?.hardQuestions || []).length === 0 && (
+                <p>No critical question anomalies found.</p>
+              )}
             </div>
           </div>
 
           <div className="card strategy-card full-width">
             <h4>💡 Recommended Reteaching Strategy</h4>
-            <p className="strategy-p">{insights.suggestions}</p>
+            {/* Safe string default fallback */}
+            <p className="strategy-p">
+              {insights?.suggestions ??
+                "No strategic recommendations available."}
+            </p>
             <button className="btn-outline" onClick={() => setInsights(null)}>
               Re-Analyze Data
             </button>
