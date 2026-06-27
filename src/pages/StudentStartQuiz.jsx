@@ -55,27 +55,33 @@ export default function StudentStartQuiz() {
     const remaining = endTimeRef.current - Date.now();
     if (remaining <= 0) {
       setTimeLeft(0);
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
       handleSubmit();
     } else {
       setTimeLeft(remaining);
     }
   }, [handleSubmit]);
 
+  // 1. Role-check guard runs as soon as user context is resolved
   useEffect(() => {
-    if (!loading && user && user.role !== "student") {
+    if (user && user.role !== "student") {
       alert("Access Denied: This area is for students only.");
       navigate("/");
     }
-  }, [user, loading, navigate]);
+  }, [user, navigate]);
 
+  // 2. Load Quiz Data Environment
   useEffect(() => {
     const load = async () => {
       try {
         const res = await startStudentQuizApi(quizId, csrfToken);
         const data = await res.json();
 
-        if (!res.ok) throw new Error(data.message);
+        if (!res.ok)
+          throw new Error(data.message || "Failed to fetch quiz content.");
         if (data.attempt?.submitted) {
           navigate(`/student/quiz/${quizId}/submitted`, { replace: true });
           return;
@@ -97,11 +103,17 @@ export default function StudentStartQuiz() {
         setAnswers(savedAnswersMap);
 
         if (data.attempt?.started_at && data.quiz?.duration_minutes) {
+          // Robust date normalization across different browsers
           const startedAt = new Date(data.attempt.started_at).getTime();
-          const durationMs = data.quiz.duration_minutes * 60 * 1000;
+          const durationMs =
+            parseInt(data.quiz.duration_minutes, 10) * 60 * 1000;
           endTimeRef.current = startedAt + durationMs;
+
           const remaining = endTimeRef.current - Date.now();
           setTimeLeft(Math.max(0, remaining));
+        } else {
+          // Fallback if metadata is missing to prevent infinite loading screens
+          setTimeLeft(0);
         }
       } catch (err) {
         setError(err.message || "Failed to initialize quiz environment.");
@@ -112,22 +124,35 @@ export default function StudentStartQuiz() {
     load();
   }, [quizId, csrfToken, navigate]);
 
+  // 3. Robust Independent Core Countdown Engine Loop
   useEffect(() => {
     if (timeLeft === null || timeLeft <= 0) return;
-    intervalRef.current = setInterval(() => {
-      checkTimeExpiry();
-    }, 1000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [timeLeft, checkTimeExpiry]);
 
+    // Only establish the interval loop if it doesn't exist yet
+    if (!intervalRef.current) {
+      intervalRef.current = setInterval(() => {
+        checkTimeExpiry();
+      }, 1000);
+    }
+
+    return () => {
+      if (timeLeft <= 1000 && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+    // Removed timeLeft from dependencies to prevent interval clearing race conditions
+  }, [checkTimeExpiry, timeLeft]);
+
+  // 4. Proctoring & Web Sockets Handler Hook
   useEffect(() => {
     if (!user || user.role !== "student") return;
 
     const reportIncident = (type) => {
       console.warn(`[Proctor] Incident Logged: ${type}`);
-      reportCheatingApi(quizId, type, csrfToken);
+      reportCheatingApi(quizId, type, csrfToken).catch((e) =>
+        console.error("Telemetry failed", e),
+      );
     };
 
     const handleVisibility = () => {
@@ -207,6 +232,7 @@ export default function StudentStartQuiz() {
   if (error) return <div className="error-screen">Error: {error}</div>;
 
   const formatTime = (ms) => {
+    if (!ms || ms <= 0) return "00:00:00";
     const s = Math.floor(ms / 1000) % 60;
     const m = Math.floor(ms / 60000) % 60;
     const h = Math.floor(ms / 3600000);
@@ -217,7 +243,7 @@ export default function StudentStartQuiz() {
     <div className="student-quiz-page neon-bg">
       <header className="quiz-header">
         <div className="quiz-meta">
-          <h2>{quiz?.title}</h2>
+          <h2>{quiz?.title ?? "Untitled Quiz"}</h2>
           <span className="student-tag">User: {user?.name}</span>
         </div>
         <div
@@ -228,11 +254,13 @@ export default function StudentStartQuiz() {
       </header>
 
       <main className="questions-container">
-        {questions.map((q, i) => (
+        {(questions || []).map((q, i) => (
           <section key={q.id} className="question-card">
             <h4 className="question-text">
               <span className="q-number">Q{i + 1}.</span>{" "}
-              <span dangerouslySetInnerHTML={createSafeHTML(q.question_text)} />
+              <span
+                dangerouslySetInnerHTML={createSafeHTML(q?.question_text || "")}
+              />
             </h4>
             {q.image_url && (
               <div className="question-image-wrapper">
@@ -245,7 +273,8 @@ export default function StudentStartQuiz() {
               </div>
             )}
             <div className="options-grid">
-              {q.options.map((opt) => (
+              {/* Optional chaining safety fallback applied to options rendering */}
+              {(q?.options || []).map((opt) => (
                 <label
                   key={opt.id}
                   className={`option-label ${(answers[q.id] || []).includes(opt.id) ? "selected" : ""}`}
@@ -259,7 +288,9 @@ export default function StudentStartQuiz() {
                   <div className="option-content">
                     <span
                       className="option-text"
-                      dangerouslySetInnerHTML={createSafeHTML(opt.option_text)}
+                      dangerouslySetInnerHTML={createSafeHTML(
+                        opt?.option_text || "",
+                      )}
                     />
                     {opt.image_url && (
                       <img
@@ -274,6 +305,11 @@ export default function StudentStartQuiz() {
             </div>
           </section>
         ))}
+        {questions.length === 0 && (
+          <div className="no-questions">
+            No questions available for this quiz setup.
+          </div>
+        )}
       </main>
 
       <footer className="quiz-footer">
